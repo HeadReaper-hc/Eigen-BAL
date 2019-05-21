@@ -55,7 +55,7 @@ private:
 
     bool BuildProblem();
 
-    bool ComputerJacobian();
+    bool ComputerAndUpdate();
 
     map<double*,ParamBlock*> Addr_ParamBlock_Map;
     map<CostFunction*,ResidualBlock*> Addr_ResidualBlock_Map;

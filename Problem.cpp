@@ -223,33 +223,114 @@ bool Problem::ProblemSolve() {
     }
      */
 
-    ComputerJacobian();
+    ComputerAndUpdate();
 
     return true;
 }
 
-bool Problem::ComputerJacobian() {
+bool Problem::ComputerAndUpdate(){
 
 
      //Eigen::MatrixXd jacobian(AllResidualDim,AllParameterDim);  //need too much memory, so I compute the Hession directly.
     Eigen::MatrixXd Hession(AllParameterDim,AllParameterDim);
-
-    Eigen::MatrixXd Residuals(AllResidualDim,1);
+    Hession.setZero();
+    Eigen::MatrixXd Residuals(AllParameterDim,1);
     Residuals.setZero();
-    int Residuals_id = 0;
+    //int Residuals_id = 0;
 
     map<CostFunction*,ResidualBlock*>::iterator iter;
     for( iter = Addr_ResidualBlock_Map.begin(); iter != Addr_ResidualBlock_Map.end(); ++iter){
         (*iter).first->Evaluate( (*iter).second->parameters );
 
-        int row_begin = Residuals_id;
+      //  int row_begin = Residuals_id;
         int row_range = (*iter).first->residualDim;
 
         for(int j=0;j<(*iter).second->param_num;j++){
             int id = (*iter).second->param_id[j];
-            int col_begin = order_param_id[ id ];
+            int row_j_begin = order_param_id[ id ];
 
-            //build jacobian and delta_b
+            int globalSize = order_param_block[id].second->global_parameter_size;
+            int localSize = globalSize;
+
+            if( order_param_block[id].second->Local_Parameter )
+            {
+                localSize = order_param_block[id].second->Local_Parameter->LocalSize();
+            }
+
+            /*
+            double temp_jacobian[globalSize*localSize];
+
+            if( globalSize != localSize ){
+                order_param_block[id].second->Local_Parameter->ComputeJacobian(order_param_block[id].first,temp_jacobian );
+            }
+            else{
+                Map<MatrixXd> temp_jacobian_eigen(temp_jacobian,globalSize,localSize);
+                temp_jacobian_eigen.setIdentity();
+            }
+            */
+
+            Eigen::MatrixXd jacobian_j_eigen_transpose(localSize,row_range);
+            if( globalSize != localSize ){
+                double* jacobian_residual = ( (*iter).first->jacobians )[j];
+                Map<MatrixXd> jacobian_residual_eigen(jacobian_residual,globalSize,row_range);
+
+                double temp_jacobian[globalSize*localSize];
+                order_param_block[id].second->Local_Parameter->ComputeJacobian(order_param_block[id].first,temp_jacobian);
+                Map<MatrixXd> temp_jacobian_eigen_transpose(temp_jacobian,localSize,globalSize);
+
+                jacobian_j_eigen_transpose = temp_jacobian_eigen_transpose * jacobian_residual_eigen;
+            }
+            else{
+                double* jacobian_residual = ( (*iter).first->jacobians )[j];
+                Map<MatrixXd> jacobian_residual_eigen(jacobian_residual,globalSize,row_range);
+                jacobian_j_eigen_transpose = jacobian_residual_eigen;
+            }
+
+            //computer jacobian.t() * delta_b
+            double* delta_b = (*iter).first->residuals;
+            Map<MatrixXd> delta_b_eigen(delta_b,row_range,1);
+            Residuals.block(row_j_begin,0,localSize,1) += jacobian_j_eigen_transpose * delta_b_eigen;
+
+            for(int k=j; k<(*iter).second->param_num;k++){
+                int id_k =(*iter).second->param_id[k];
+                int col_k_begin = order_param_id[id_k];
+                if(k == j){
+                    Hession.block(row_j_begin,col_k_begin,localSize,localSize) += jacobian_j_eigen_transpose * jacobian_j_eigen_transpose.transpose();
+                }
+                else{
+
+                    int globalSize_k = order_param_block[id_k].second->global_parameter_size;
+                    int localSize_k = globalSize_k;
+
+                    if( order_param_block[id_k].second->Local_Parameter )
+                    {
+                        localSize_k = order_param_block[id_k].second->Local_Parameter->LocalSize();
+                    }
+
+                    Eigen::MatrixXd jacobian_k_eigen(row_range,localSize_k);
+                    if( globalSize_k != localSize_k ){
+                        double* jacobian_residual_k = ( (*iter).first->jacobians )[k];
+                        Map<MatrixXd> jacobian_residual_k_eigen_transpose(jacobian_residual_k,globalSize,row_range);
+
+                        double temp_jacobian_k[globalSize_k*localSize_k];
+                        order_param_block[id_k].second->Local_Parameter->ComputeJacobian(order_param_block[id_k].first,temp_jacobian_k);
+                        Map<MatrixXd> temp_jacobian_k_transpose(temp_jacobian_k,localSize,globalSize);
+
+                        jacobian_k_eigen = jacobian_residual_k_eigen_transpose.transpose() *  temp_jacobian_k_transpose.transpose();
+                    }
+                    else{
+                        double* jacobian_residual_k = ( (*iter).first->jacobians )[k];
+                        Map<MatrixXd> jacobian_residual_k_eigen_transpose(jacobian_residual_k,globalSize_k,row_range);
+                        jacobian_k_eigen = jacobian_residual_k_eigen_transpose.transpose();
+                    }
+
+                    Hession.block(row_j_begin,col_k_begin,localSize,localSize_k) += jacobian_j_eigen_transpose * jacobian_k_eigen;
+                    Hession.block(col_k_begin,row_j_begin,localSize_k,localSize) += (jacobian_j_eigen_transpose * jacobian_k_eigen).transpose();
+                }
+            }
+
+            /*
+            //build jacobian
             if( order_param_block[id].second->Local_Parameter )
             {
                 int globalSize = order_param_block[id].second->global_parameter_size;
@@ -274,17 +355,24 @@ bool Problem::ComputerJacobian() {
 
 
             }
+             */
         }
 
-
+        /*
         double* delta_b = ( (*iter).first->residuals );
         Map<MatrixXd> delta_b_eigen(delta_b,row_range,1);
         Residuals.block(row_begin,0,row_range,1) = delta_b_eigen;
         Residuals_id +=row_range;
-
+        */
     }
 
-    cout <<"The whole Residuals is : " <<Residuals.norm()<<endl;
+    MatrixXd delta_param(AllParameterDim,1);
+    delta_param.setZero();
+    cout<<"begin compute............"<<endl;
+    delta_param = Hession.ldlt().solve(Residuals);
+    cout<<"end compute.............."<<endl;
+    cout <<delta_param<<endl;
+
 
     return true;
 }
